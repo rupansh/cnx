@@ -79,6 +79,8 @@ impl Stream for XcbEventStream {
     }
 }
 
+type XcbPropertiesStream<T> = Result<(Rc<ewmh::Connection>, T)>;
+
 // A `Stream` that listens to `PROPERTY_CHANGE` notifications.
 //
 // By default it listens to `PROPERTY_CHANGE` notifications for the provided
@@ -87,7 +89,7 @@ impl Stream for XcbEventStream {
 // windows.
 pub fn xcb_properties_stream(
     properties: &[&str],
-) -> Result<(Rc<ewmh::Connection>, impl Stream<Item = ()>)> {
+) -> XcbPropertiesStream<impl Stream<Item = ()>> {
     let (xcb_conn, screen_idx) =
         xcb::Connection::connect(None).context("Failed to connect to X server")?;
     let root_window = xcb_conn

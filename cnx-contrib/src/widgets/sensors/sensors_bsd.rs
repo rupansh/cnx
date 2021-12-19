@@ -8,13 +8,13 @@ use regex::Regex;
 
 use crate::cmd::command_output;
 use crate::text::{Attributes, Text};
-use crate::widgets::{Widget, WidgetStream};
+use crate::widgets::{WidgetStream, WidgetStreamI};
 use lazy_static::lazy_static;
 // use regex::Regex;
 use std::str::FromStr;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tokio_stream::StreamExt;
+use tokio_stream::{StreamExt, Stream};
 
 #[derive(Debug, PartialEq)]
 struct Value {
@@ -95,14 +95,17 @@ impl Sensors {
     /// Creates a new Sensors widget.
     ///
     /// A list of sensor names should be passed as the `sensors` argument.
-    pub fn new<S: Into<String>>(attr: Attributes, sensors: Vec<S>) -> Sensors {
+    pub fn new<S: Into<String>>(attr: Attributes, sensors: Vec<S>) -> WidgetStream<Sensors, impl Stream<Item = WidgetStreamI>> {
         let sensors = sensors.into_iter().map(Into::into).collect();
-        Sensors {
-            update_interval: Duration::from_secs(60),
-            attr,
-            sensors,
-            info: SensorsInfo::default(),
-        }
+        WidgetStream::new(
+            Sensors {
+                update_interval: Duration::from_secs(60),
+                attr,
+                sensors,
+                info: SensorsInfo::default(),
+            },
+            Self::into_stream
+        )
     }
 
     fn tick(&self) -> Result<Vec<Text>> {
@@ -126,13 +129,11 @@ impl Sensors {
 
         Ok(texts)
     }
-}
 
-impl Widget for Sensors {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
         let interval = time::interval(self.update_interval);
         let stream = IntervalStream::new(interval).map(move |_| self.tick());
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 }

@@ -1,18 +1,39 @@
 use anyhow::Result;
 use async_stream::try_stream;
 use cnx::text::{Attributes, Text};
-use cnx::widgets::{Widget, WidgetStream};
+use cnx::widgets::{WidgetStream, WidgetStreamI};
+use tokio_stream::Stream;
 use std::time::Duration;
 use weathernoaa::weather::*;
 
 /// Represents Weather widget used to show current weather information.
-pub struct Weather {
+pub struct Weather<F: Fn(WeatherInfo) -> String> {
     attr: Attributes,
     station_code: String,
-    render: Option<Box<dyn Fn(WeatherInfo) -> String>>,
+    render: F,
 }
 
-impl Weather {
+fn default_render(info: WeatherInfo) -> String {
+    format!("Temp: {}°C", info.temperature.celsius)
+}
+
+impl Weather<fn(WeatherInfo) -> String> {
+    pub fn new(
+        attr: Attributes,
+        station_code: String
+    ) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Weather {
+                attr,
+                station_code,
+                render: default_render,
+            },
+            Self::into_stream
+        )
+    }
+}
+
+impl<F: Fn(WeatherInfo) -> String + 'static> Weather<F> {
     /// Creates a new [`Weather`] widget.
     ///
     /// Arguments
@@ -57,25 +78,26 @@ impl Weather {
     /// # }
     /// # fn main() { run().unwrap(); }
     /// ```
-    pub fn new(
+    pub fn new_with_render(
         attr: Attributes,
         station_code: String,
-        render: Option<Box<dyn Fn(WeatherInfo) -> String>>,
-    ) -> Weather {
-        Weather {
-            attr,
-            station_code,
-            render,
-        }
+        render: F,
+    ) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Weather {
+                attr,
+                station_code,
+                render,
+            },
+            Self::into_stream
+        )
     }
-}
 
-impl Widget for Weather {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
         let stream = try_stream! {
             loop {
                 let weather = get_weather(self.station_code.clone()).await?;
-                let text = self.render.as_ref().map_or(format!("Temp: {}°C", weather.temperature.celsius), |x| (x)(weather));
+                let text = (self.render)(weather);
                 let texts = vec![Text {
                     attr: self.attr.clone(),
                     text,
@@ -89,6 +111,6 @@ impl Widget for Weather {
                 tokio::time::sleep(sleep_for).await;
             }
         };
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 }

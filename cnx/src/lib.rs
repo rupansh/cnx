@@ -122,12 +122,12 @@ pub mod widgets;
 mod xcb;
 
 use anyhow::Result;
-use tokio::runtime::Runtime;
-use tokio::task;
-use tokio_stream::{StreamExt, StreamMap};
+use futures::Stream;
+use tokio_stream::{StreamExt, Empty};
+use widgets::{WidgetStreamI, WidgetStream};
+use tokio::pin;
 
 use crate::bar::Bar;
-use crate::widgets::Widget;
 use crate::xcb::XcbEventStream;
 
 pub use bar::Position;
@@ -140,88 +140,74 @@ pub use bar::Position;
 ///
 /// [`add_widget()`]: #method.add_widget
 /// [`run()`]: #method.run
-pub struct Cnx {
-    position: Position,
-    widgets: Vec<Box<dyn Widget>>,
+pub struct Cnx<FullStream: Stream<Item = (usize, WidgetStreamI)> + 'static> {
+    bar: Bar,
+    stream: FullStream,
 }
 
-impl Cnx {
+impl Cnx<Empty<(usize, WidgetStreamI)>> {
     /// Creates a new `Cnx` instance.
     ///
     /// This creates a new `Cnx` instance at either the top or bottom of the
     /// screen, depending on the value of the [`Position`] enum.
     ///
     /// [`Position`]: enum.Position.html
-    pub fn new(position: Position) -> Self {
-        let widgets = Vec::new();
-        Self { position, widgets }
+    pub fn new(position: Position) -> Result<Self> {
+        Ok(Self {
+            bar: Bar::new(position)?,
+            stream: tokio_stream::empty(),
+        })
     }
+}
 
+impl<FullStream: Stream<Item = (usize, WidgetStreamI)> + 'static> Cnx<FullStream> {
     /// Adds a widget to the `Cnx` instance.
     ///
     /// Takes ownership of the [`Widget`] and adds it to the Cnx instance to
     /// the right of any existing widgets.
     ///
     /// [`Widget`]: widgets/trait.Widget.html
-    pub fn add_widget<W>(&mut self, widget: W)
-    where
-        W: Widget + 'static,
-    {
-        self.widgets.push(Box::new(widget));
+    pub fn add_widget<T: 'static, S: Stream<Item = WidgetStreamI> + 'static>(mut self, stream: WidgetStream<T, S>) -> Result<Cnx<impl Stream<Item = (usize, WidgetStreamI)> + 'static>> {
+        let idx = self.bar.add_content(Vec::new())?;
+        Ok(Cnx {
+            bar: self.bar,
+            stream: self.stream.merge(stream.into_stream()?.map(move |v| (idx, v))),
+        })
     }
+
 
     /// Runs the Cnx instance.
     ///
     /// This method takes ownership of the Cnx instance and runs it until either
     /// the process is terminated, or an internal error is returned.
-    pub fn run(self) -> Result<()> {
-        // Use a single-threaded event loop. We aren't interested in
-        // performance too much, so don't mind if we block the loop
-        // occasionally. We are using events to get woken up as
-        // infrequently as possible (to save battery).
-        let rt = Runtime::new()?;
-        let local = task::LocalSet::new();
-        local.block_on(&rt, self.run_inner())?;
-        Ok(())
-    }
-
-    async fn run_inner(self) -> Result<()> {
-        let mut bar = Bar::new(self.position)?;
-
-        let mut widgets = StreamMap::with_capacity(self.widgets.len());
-        for widget in self.widgets {
-            let idx = bar.add_content(Vec::new())?;
-            widgets.insert(idx, widget.into_stream()?);
-        }
+    pub async fn run(self) -> Result<()> {
+        let mut bar = self.bar;
+        let stream = self.stream;
 
         let mut event_stream = XcbEventStream::new(bar.connection().clone())?;
-        task::spawn_local(async move {
-            loop {
-                tokio::select! {
-                    // Pass each XCB event to the Bar.
-                    Some(event) = event_stream.next() => {
-                        if let Err(err) = bar.process_event(event) {
-                            println!("Error processing XCB event: {}", err);
-                        }
-                    },
+        pin!(stream);
+        loop {
+            tokio::select! {
+                // Pass each XCB event to the Bar.
+                Some(event) = event_stream.next() => {
+                    if let Err(err) = bar.process_event(event) {
+                        println!("Error processing XCB event: {}", err);
+                    }
+                },
 
-                    // Each time a widget yields new values, pass to the bar.
-                    // Ignore (but log) any errors from widgets.
-                    Some((idx, result)) = widgets.next() => {
-                        match result {
-                            Err(err) => println!("Error from widget {}: {}", idx, err),
-                            Ok(texts) => {
-                                if let Err(err) = bar.update_content(idx, texts) {
-                                    println!("Error updating widget {}: {}", idx, err);
-                                }
+                // Each time a widget yields new values, pass to the bar.
+                // Ignore (but log) any errors from widgets.
+                Some((idx, result)) = stream.next() => {
+                    match result {
+                        Err(err) => println!("Error from widget {}: {}", idx, err),
+                        Ok(texts) => {
+                            if let Err(err) = bar.update_content(idx, texts) {
+                                println!("Error updating widget {}: {}", idx, err);
                             }
                         }
                     }
                 }
             }
-        })
-        .await?;
-
-        Ok(())
+        }
     }
 }

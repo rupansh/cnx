@@ -1,12 +1,12 @@
 use anyhow::Result;
 use byte_unit::{Byte, ByteUnit};
 use cnx::text::{Attributes, Text};
-use cnx::widgets::{Widget, WidgetStream};
+use cnx::widgets::{WidgetStream, WidgetStreamI};
 use nix::sys::statvfs::statvfs;
 use std::time::Duration;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tokio_stream::StreamExt;
+use tokio_stream::{StreamExt, Stream};
 
 /// Represent Information about the mounted filesystem
 #[derive(Debug)]
@@ -36,13 +36,34 @@ impl DiskInfo {
 
 /// Disk usage widget to show current usage and remaining free space
 /// in the mounted filesystem.
-pub struct DiskUsage {
+pub struct DiskUsage<F: Fn(DiskInfo) -> String> {
     attr: Attributes,
     path: String,
-    render: Option<Box<dyn Fn(DiskInfo) -> String>>,
+    render: F,
 }
 
-impl DiskUsage {
+fn default_render(info: DiskInfo) -> String {
+    format!(
+        "Disk: {}/{}",
+        info.used.get_adjusted_unit(ByteUnit::GiB).format(0),
+        info.total.get_adjusted_unit(ByteUnit::GiB).format(0)
+    )
+}
+
+impl DiskUsage<fn(DiskInfo) -> String> {
+    pub fn new(attr: Attributes, path: String) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Self {
+                attr,
+                path,
+                render: default_render
+            },
+            Self::into_stream
+        )
+    }
+}
+
+impl<F: Fn(DiskInfo) -> String + 'static> DiskUsage<F> {
     /// Creates a new [`DiskUsage`] widget.
     ///
     /// Arguments
@@ -81,26 +102,21 @@ impl DiskUsage {
     /// # }
     /// # fn main() { run().unwrap(); }
     /// ```
-    pub fn new(
+    pub fn new_with_render(
         attr: Attributes,
         path: String,
-        render: Option<Box<dyn Fn(DiskInfo) -> String>>,
-    ) -> Self {
-        Self { attr, render, path }
+        render: F,
+    ) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Self { attr, render, path },
+            Self::into_stream
+        )
     }
 
     fn tick(&self) -> Result<Vec<Text>> {
         let disk_info = DiskInfo::new(self.path.as_ref())?;
-        let disk_default_str = format!(
-            "Disk: {}/{}",
-            disk_info.used.get_adjusted_unit(ByteUnit::GiB).format(0),
-            disk_info.total.get_adjusted_unit(ByteUnit::GiB).format(0)
-        );
 
-        let text: String = self
-            .render
-            .as_ref()
-            .map_or(disk_default_str, |disk| (disk)(disk_info));
+        let text: String = (self.render)(disk_info);
         let texts = vec![Text {
             attr: self.attr.clone(),
             text,
@@ -109,14 +125,12 @@ impl DiskUsage {
         }];
         Ok(texts)
     }
-}
 
-impl Widget for DiskUsage {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
         let one_hour = Duration::from_secs(3600);
         let interval = time::interval(one_hour);
         let stream = IntervalStream::new(interval).map(move |_| self.tick());
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 }

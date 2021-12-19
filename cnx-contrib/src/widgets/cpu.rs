@@ -1,22 +1,40 @@
 use anyhow::{anyhow, Result};
 use cnx::text::{Attributes, Text};
-use cnx::widgets::{Widget, WidgetStream};
+use cnx::widgets::{WidgetStream, WidgetStreamI};
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::time::Duration;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tokio_stream::StreamExt;
+use tokio_stream::{StreamExt, Stream};
 
 /// Represents CPU widget used to show current CPU consumptiong
-pub struct Cpu {
+pub struct Cpu<F: Fn(u64) -> String> {
     attr: Attributes,
     cpu_data: CpuData,
-    render: Option<Box<dyn Fn(u64) -> String>>,
+    render: F,
 }
 
-impl Cpu {
+fn default_render(usage: u64) -> String {
+    format!("{} %", usage)
+}
+
+impl Cpu<fn(u64) -> String> {
+    pub fn new(attr: Attributes) -> Result<WidgetStream<Self, impl Stream<Item = WidgetStreamI>>> {
+        let cpu_data = CpuData::get_values()?;
+        Ok(WidgetStream::new(
+            Cpu {
+                attr,
+                cpu_data,
+                render: default_render
+            },
+            Self::into_stream
+        ))
+    }
+}
+
+impl<F: Fn(u64) -> String + 'static> Cpu<F> {
     /// Creates a new [`Cpu`] widget.
     ///
     /// Arguments
@@ -53,13 +71,16 @@ impl Cpu {
     /// # }
     /// # fn main() { run().unwrap(); }
     /// ```
-    pub fn new(attr: Attributes, render: Option<Box<dyn Fn(u64) -> String>>) -> Result<Self> {
+    pub fn new_with_render(attr: Attributes, render: F) -> Result<WidgetStream<Self, impl Stream<Item = WidgetStreamI>>> {
         let cpu_data = CpuData::get_values()?;
-        Ok(Cpu {
-            attr,
-            cpu_data,
-            render,
-        })
+        Ok(WidgetStream::new(
+            Cpu {
+                attr,
+                cpu_data,
+                render,
+            },
+            Self::into_stream
+        ))
     }
 
     fn tick(&mut self) -> Result<Vec<Text>> {
@@ -80,10 +101,7 @@ impl Cpu {
         };
 
         let cpu_usage = (percentage * 100.0) as u64;
-        let text = self
-            .render
-            .as_ref()
-            .map_or(format!("{} %", cpu_usage), |x| (x)(cpu_usage));
+        let text = (self.render)(cpu_usage);
         self.cpu_data = current;
         let texts = vec![Text {
             attr: self.attr.clone(),
@@ -92,6 +110,13 @@ impl Cpu {
             markup: true,
         }];
         Ok(texts)
+    }
+
+    fn into_stream(mut self) -> Result<impl Stream<Item = WidgetStreamI>> {
+        let ten_seconds = Duration::from_secs(10);
+        let interval = time::interval(ten_seconds);
+        let stream = IntervalStream::new(interval).map(move |_| self.tick());
+        Ok(stream)
     }
 }
 
@@ -140,14 +165,5 @@ impl CpuData {
             _ => return Err(anyhow!("Missing data in /proc/stat")),
         }
         Ok(cpu_data)
-    }
-}
-
-impl Widget for Cpu {
-    fn into_stream(mut self: Box<Self>) -> Result<WidgetStream> {
-        let ten_seconds = Duration::from_secs(10);
-        let interval = time::interval(ten_seconds);
-        let stream = IntervalStream::new(interval).map(move |_| self.tick());
-        Ok(Box::pin(stream))
     }
 }

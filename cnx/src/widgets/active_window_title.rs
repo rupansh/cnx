@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
+use futures::Stream;
 use futures::stream::StreamExt;
 use xcb_util::ewmh;
 
 use crate::text::{Attributes, Text};
-use crate::widgets::{Widget, WidgetStream};
 use crate::xcb::xcb_properties_stream;
+
+use super::{WidgetStreamI, WidgetStream};
 
 /// Shows the title of the currently focused window.
 ///
@@ -22,8 +24,24 @@ pub struct ActiveWindowTitle {
 
 impl ActiveWindowTitle {
     /// Creates a new Active Window Title widget.
-    pub fn new(attr: Attributes) -> ActiveWindowTitle {
-        ActiveWindowTitle { attr }
+    pub fn new(attr: Attributes) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Self {
+                attr
+            },
+            Self::into_stream
+        )
+    }
+
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
+        let properties = &["_NET_ACTIVE_WINDOW", "_NET_WM_NAME"];
+        let screen_idx = 0; // XXX assume
+        let (conn, stream) =
+            xcb_properties_stream(properties).context("Initialising ActiveWindowtitle")?;
+
+        let stream = stream.map(move |()| Ok(self.on_change(&conn, screen_idx)));
+
+        Ok(stream)
     }
 
     fn on_change(&self, conn: &ewmh::Connection, screen_idx: i32) -> Vec<Text> {
@@ -51,18 +69,5 @@ impl ActiveWindowTitle {
             stretch: true,
             markup: false,
         }]
-    }
-}
-
-impl Widget for ActiveWindowTitle {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
-        let properties = &["_NET_ACTIVE_WINDOW", "_NET_WM_NAME"];
-        let screen_idx = 0; // XXX assume
-        let (conn, stream) =
-            xcb_properties_stream(properties).context("Initialising ActiveWindowtitle")?;
-
-        let stream = stream.map(move |()| Ok(self.on_change(&conn, screen_idx)));
-
-        Ok(Box::pin(stream))
     }
 }

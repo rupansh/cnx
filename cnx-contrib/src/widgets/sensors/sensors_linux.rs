@@ -1,14 +1,14 @@
 use anyhow::{anyhow, Context, Result};
 #[cfg(target_os = "linux")]
 use cnx::text::{Attributes, Text};
-use cnx::widgets::{Widget, WidgetStream};
+use cnx::widgets::{WidgetStream, WidgetStreamI};
 use regex::Regex;
 use std::collections::HashMap;
 use std::process::Command;
 use std::time::Duration;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tokio_stream::StreamExt;
+use tokio_stream::{StreamExt, Stream};
 
 #[derive(Debug, PartialEq)]
 struct Value<'a> {
@@ -96,12 +96,15 @@ impl Sensors {
     /// # }
     /// # fn main() { run().unwrap(); }
     /// ```
-    pub fn new<S: Into<String>>(attr: Attributes, sensors: Vec<S>) -> Sensors {
-        Sensors {
-            update_interval: Duration::from_secs(60),
-            attr,
-            sensors: sensors.into_iter().map(Into::into).collect(),
-        }
+    pub fn new<S: Into<String>>(attr: Attributes, sensors: Vec<S>) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Sensors {
+                update_interval: Duration::from_secs(60),
+                attr,
+                sensors: sensors.into_iter().map(Into::into).collect(),
+            },
+            Self::into_stream
+        )
     }
 
     fn tick(&self) -> Result<Vec<Text>> {
@@ -127,14 +130,12 @@ impl Sensors {
             })
             .collect()
     }
-}
 
-impl Widget for Sensors {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
         let interval = time::interval(self.update_interval);
         let stream = IntervalStream::new(interval).map(move |_| self.tick());
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 }
 

@@ -2,7 +2,7 @@ use alsa::mixer::{SelemChannelId, SelemId};
 use alsa::{self, Mixer, PollDescriptors};
 use anyhow::{anyhow, Context, Result};
 use cnx::text::{Attributes, Text};
-use cnx::widgets::{Widget, WidgetStream};
+use cnx::widgets::{WidgetStream, WidgetStreamI};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::io::RawFd;
 use std::pin::Pin;
@@ -64,15 +64,14 @@ impl Volume {
     /// # }
     /// # fn main() { run().unwrap(); }
     /// ```
-    pub fn new(attr: Attributes) -> Volume {
-        Volume { attr }
+    pub fn new(attr: Attributes) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Volume { attr },
+            Self::into_stream
+        )
     }
-}
 
-// https://github.com/mjkillough/cnx/blob/92c24238be541c75d88181208862505739be33fd/src/widgets/volume.rs
-
-impl Widget for Volume {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
         let mixer_name = "default";
         // We don't attempt to use the same mixer to listen for events and to
         // recompute the mixer state (in the callback below) as the Mixer seems
@@ -108,7 +107,7 @@ impl Widget for Volume {
             }])
         });
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 }
 

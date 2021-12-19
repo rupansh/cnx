@@ -1,11 +1,11 @@
 use anyhow::Result;
 use cnx::text::{Attributes, Text, Threshold};
-use cnx::widgets::{Widget, WidgetStream};
+use cnx::widgets::{WidgetStream, WidgetStreamI};
 use iwlib::*;
 use std::time::Duration;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tokio_stream::StreamExt;
+use tokio_stream::{StreamExt, Stream};
 
 /// Wireless widget to show wireless information for a particular ESSID
 pub struct Wireless {
@@ -55,13 +55,16 @@ impl Wireless {
     /// # }
     /// # fn main() { run().unwrap(); }
     /// ```
-    pub fn new(attr: Attributes, interface: String, threshold: Option<Threshold>) -> Wireless {
-        Wireless {
-            update_interval: Duration::from_secs(3600),
-            interface,
-            attr,
-            threshold,
-        }
+    pub fn new(attr: Attributes, interface: String, threshold: Option<Threshold>) -> WidgetStream<Wireless, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Wireless {
+                update_interval: Duration::from_secs(3600),
+                interface,
+                attr,
+                threshold,
+            },
+            Self::into_stream
+        )
     }
 
     fn tick(&self) -> Vec<Text> {
@@ -95,13 +98,11 @@ impl Wireless {
             markup: self.threshold.is_some(),
         }]
     }
-}
 
-impl Widget for Wireless {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
         let interval = time::interval(self.update_interval);
         let stream = IntervalStream::new(interval).map(move |_| Ok(self.tick()));
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 }

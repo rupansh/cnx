@@ -7,7 +7,7 @@ use tokio::stream::{self, Stream, StreamExt};
 use tokio::sync::mpsc;
 
 use crate::text::{Attributes, Text};
-use crate::widgets::{Widget, WidgetStream};
+use crate::widgets::{WidgetStream, WidgetStreamI};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum State {
@@ -83,8 +83,11 @@ pub struct Volume {
 
 impl Volume {
     /// Creates a new Volume widget.
-    pub fn new(attr: Attributes) -> Self {
-        Self { attr }
+    pub fn new(attr: Attributes) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Self { attr },
+            Self::on_change
+        )
     }
 
     fn on_change(&self, state: State) -> Result<Vec<Text>> {
@@ -100,13 +103,11 @@ impl Volume {
             stretch: false,
         }])
     }
-}
 
-impl Widget for Volume {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
         let info = VolumeInfo::new();
         let stream = info.stream().map(move |state| self.on_change(state));
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 }

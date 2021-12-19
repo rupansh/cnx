@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
+use futures::Stream;
 use futures::stream::StreamExt;
 use std::cmp::Ordering;
 use xcb_util::ewmh;
 
 use crate::text::{Attributes, Text};
-use crate::widgets::{Widget, WidgetStream};
 use crate::xcb::xcb_properties_stream;
+
+use super::{WidgetStreamI, WidgetStream};
 
 /// Shows the WM's workspaces/groups, highlighting whichever is currently
 /// active.
@@ -17,16 +19,29 @@ use crate::xcb::xcb_properties_stream;
 /// [`EWMH`]: https://specifications.freedesktop.org/wm-spec/wm-spec-latest.html
 pub struct Pager {
     active_attr: Attributes,
-    inactive_attr: Attributes,
+    inactive_attr : Attributes
 }
 
 impl Pager {
-    ///  Creates a new Pager widget.
-    pub fn new(active_attr: Attributes, inactive_attr: Attributes) -> Self {
-        Self {
-            active_attr,
-            inactive_attr,
-        }
+    pub fn new(active_attr: Attributes, inactive_attr: Attributes) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Self {
+                active_attr,
+                inactive_attr
+            },
+            Self::into_stream
+        )
+    }
+
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
+        let properties = &[
+            "_NET_NUMBER_OF_DESKTOPS",
+            "_NET_CURRENT_DESKTOP",
+            "_NET_DESKTOP_NAMES",
+        ];
+        let screen_idx = 0;
+        let (conn, stream) = xcb_properties_stream(properties).context("Initialising Pager")?;
+        return Ok(stream.map(move |()| Ok(self.on_change(&conn, screen_idx))));
     }
 
     fn on_change(&self, conn: &ewmh::Connection, screen_idx: i32) -> Vec<Text> {
@@ -70,21 +85,5 @@ impl Pager {
                 }
             })
             .collect()
-    }
-}
-
-impl Widget for Pager {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
-        let properties = &[
-            "_NET_NUMBER_OF_DESKTOPS",
-            "_NET_CURRENT_DESKTOP",
-            "_NET_DESKTOP_NAMES",
-        ];
-        let screen_idx = 0; // XXX assume
-        let (conn, stream) = xcb_properties_stream(properties).context("Initialising Pager")?;
-
-        let stream = stream.map(move |()| Ok(self.on_change(&conn, screen_idx)));
-
-        Ok(Box::pin(stream))
     }
 }

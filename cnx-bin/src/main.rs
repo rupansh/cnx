@@ -39,7 +39,8 @@ fn weather_sky_condition(condition: String) -> &'static str {
     }
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let attr = Attributes {
         font: Font::new("Ubuntu Mono Bold 14"),
         fg_color: Color::white(),
@@ -54,18 +55,16 @@ fn main() -> Result<()> {
         padding: Padding::new(8.0, 8.0, 0.0, 0.0),
     };
 
-    let mut cnx = Cnx::new(Position::Bottom);
-
     // let sensors = Sensors::new(attr.clone(), vec!["Core 0", "Core 1"]);
-    let battery_render = Box::new(|battery_info: BatteryInfo| {
+    let battery_render = |battery_info: BatteryInfo| {
         let percentage = battery_info.capacity;
 
         let default_text = format!("🔋{percentage:.0}%", percentage = percentage,);
         pango_markup_single_render(Color::white(), default_text)
-    });
+    };
 
-    let battery = Battery::new(attr.clone(), Color::red(), None, Some(battery_render));
-    let render = Box::new(|load| {
+    let battery = Battery::new_with_render(attr.clone(), Color::red(), None, battery_render);
+    let render = |load| {
         let mut color = Color::yellow().to_hex();
         if load < 5 {
             color = Color::green().to_hex();
@@ -77,8 +76,8 @@ fn main() -> Result<()> {
             "<span foreground=\"#808080\">[</span>Cpu: <span foreground=\"{}\">{}%</span><span foreground=\"#808080\">]</span>",
             color, load
         )
-    });
-    let cpu = cpu::Cpu::new(attr.clone(), Some(render))?;
+    };
+    let cpu = cpu::Cpu::new_with_render(attr.clone(), render)?;
 
     let volume = volume::Volume::new(attr.clone());
 
@@ -87,39 +86,41 @@ fn main() -> Result<()> {
     let wireless =
         wireless::Wireless::new(attr.clone(), "wlp2s0".to_owned(), Some(default_threshold));
 
-    let disk_render = Box::new(|disk_info: DiskInfo| {
+    let disk_render = |disk_info: DiskInfo| {
         let used = disk_info.used.get_adjusted_unit(ByteUnit::GiB).format(0);
         let total = disk_info.total.get_adjusted_unit(ByteUnit::GiB).format(0);
         let disk_text = format!("🏠 {}/{}", used, total);
         pango_markup_single_render(Color::white(), disk_text)
-    });
+    };
 
-    let disk_usage = disk_usage::DiskUsage::new(attr.clone(), "/home".into(), Some(disk_render));
+    let disk_usage = disk_usage::DiskUsage::new_with_render(attr.clone(), "/home".into(), disk_render);
 
-    let weather_render = Box::new(|weather: WeatherInfo| {
+    let weather_render = |weather: WeatherInfo| {
         let sky_condition = weather_sky_condition(weather.sky_condition);
         let weather_text = format!("BLR: {} :", sky_condition);
         let weather_temp = format!(" {}°C", weather.temperature.celsius);
         pango_markup_render(Color::white(), weather_text, weather_temp)
-    });
+    };
 
-    let weather = weather::Weather::new(attr.clone(), "VOBL".into(), Some(weather_render));
+    let weather = weather::Weather::new_with_render(attr.clone(), "VOBL".into(), weather_render);
 
     let mut p2_attr = pager_attr.clone();
     p2_attr.bg_color = None;
-    cnx.add_widget(Pager::new(pager_attr, p2_attr));
-    cnx.add_widget(ActiveWindowTitle::new(attr.clone()));
-    cnx.add_widget(cpu);
-    cnx.add_widget(weather);
-    cnx.add_widget(disk_usage);
-    cnx.add_widget(wireless);
-    cnx.add_widget(volume);
 
-    // cnx.add_widget(sensors);
-    cnx.add_widget(battery);
     let time_template = Some("<span foreground=\"#808080\">[</span>%d-%m-%Y %a %I:%M %p<span foreground=\"#808080\">]</span>".into());
-    cnx.add_widget(Clock::new(attr, time_template));
-    cnx.run()?;
+
+    Cnx::new(Position::Bottom)?
+        .add_widget(Pager::new(pager_attr, p2_attr))?
+        .add_widget(ActiveWindowTitle::new(attr.clone()))?
+        .add_widget(cpu)?
+        .add_widget(weather)?
+        .add_widget(disk_usage)?
+        .add_widget(wireless)?
+        .add_widget(volume)?
+        .add_widget(battery)?
+        .add_widget(Clock::new(attr, time_template))?
+        .run()
+        .await?;
 
     Ok(())
 }

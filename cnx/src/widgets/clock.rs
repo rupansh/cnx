@@ -1,11 +1,13 @@
 use anyhow::Result;
+use futures::Stream;
 use std::time::Duration;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 
 use crate::text::{Attributes, Text};
-use crate::widgets::{Widget, WidgetStream};
+
+use super::{WidgetStreamI, WidgetStream};
 
 /// Shows the current time and date.
 ///
@@ -18,8 +20,23 @@ pub struct Clock {
 
 impl Clock {
     // Creates a new Clock widget.
-    pub fn new(attr: Attributes, format_str: Option<String>) -> Self {
-        Self { attr, format_str }
+    pub fn new(attr: Attributes, format_str: Option<String>) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Self {
+                attr, format_str
+            },
+            Self::into_stream
+        )
+    }
+
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
+        // As we're not showing seconds, we can sleep for however long
+        // it takes until the minutes changes between updates.
+        let one_minute = Duration::from_secs(60);
+        let interval = time::interval(one_minute);
+        let stream = IntervalStream::new(interval).map(move |_| Ok(self.tick()));
+
+        return Ok(stream)
     }
 
     fn tick(&self) -> Vec<Text> {
@@ -36,17 +53,5 @@ impl Clock {
             markup: true,
         }];
         texts
-    }
-}
-
-impl Widget for Clock {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
-        // As we're not showing seconds, we can sleep for however long
-        // it takes until the minutes changes between updates.
-        let one_minute = Duration::from_secs(60);
-        let interval = time::interval(one_minute);
-        let stream = IntervalStream::new(interval).map(move |_| Ok(self.tick()));
-
-        Ok(Box::pin(stream))
     }
 }

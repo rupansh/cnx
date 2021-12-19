@@ -1,13 +1,13 @@
 use anyhow::{anyhow, Context, Error, Result};
 use cnx::text::{Attributes, Color, Text};
-use cnx::widgets::{Widget, WidgetStream};
+use cnx::widgets::{WidgetStream, WidgetStreamI};
 use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
 use std::time::Duration;
 use tokio::time;
 use tokio_stream::wrappers::IntervalStream;
-use tokio_stream::StreamExt;
+use tokio_stream::{StreamExt, Stream};
 
 /// Represent Battery's operating status
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,16 +38,17 @@ impl FromStr for Status {
 ///
 /// When the battery has less than 10% charge remaining, the widget's text will
 /// change to the specified `warning_color`.
-///
+///magical
 /// Battery charge information is read from [`/sys/class/power_supply/BAT0/`].
 ///
 /// [`/sys/class/power_supply/BAT0/`]: https://www.kernel.org/doc/Documentation/power/power_supply_class.txt
-pub struct Battery {
+pub struct Battery<F: Fn(BatteryInfo) -> String> {
     update_interval: Duration,
     battery: String,
     attr: Attributes,
     warning_color: Color,
-    render: Option<Box<dyn Fn(BatteryInfo) -> String>>,
+    render: F,
+    markup: bool
 }
 
 /// Represent Battery information
@@ -59,7 +60,31 @@ pub struct BatteryInfo {
     pub capacity: u8,
 }
 
-impl Battery {
+fn render_default(info: BatteryInfo) -> String {
+    format!("({percentage:.0}%)", percentage = info.capacity,)
+}
+
+impl Battery<fn(BatteryInfo) -> String> {
+    pub fn new(
+        attr: Attributes,
+        warning_color: Color,
+        battery: Option<String>,
+    ) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Battery {
+                update_interval: Duration::from_secs(60),
+                battery: battery.unwrap_or_else(|| "BAT0".into()),
+                attr,
+                warning_color,
+                render: render_default,
+                markup: false
+            },
+            Self::into_stream
+        )
+    }
+}
+
+impl<F: Fn(BatteryInfo) -> String + 'static> Battery<F> {
     ///  Creates a new Battery widget.
     ///
     ///  Creates a new `Battery` widget, whose text will be displayed with the
@@ -98,19 +123,23 @@ impl Battery {
     /// # }
     /// # fn main() { run().unwrap(); }
     /// ```
-    pub fn new(
+    pub fn new_with_render(
         attr: Attributes,
         warning_color: Color,
         battery: Option<String>,
-        render: Option<Box<dyn Fn(BatteryInfo) -> String>>,
-    ) -> Battery {
-        Battery {
-            update_interval: Duration::from_secs(60),
-            battery: battery.unwrap_or_else(|| "BAT0".into()),
-            attr,
-            warning_color,
-            render,
-        }
+        render: F,
+    ) -> WidgetStream<Self, impl Stream<Item = WidgetStreamI>> {
+        WidgetStream::new(
+            Battery {
+                update_interval: Duration::from_secs(60),
+                battery: battery.unwrap_or_else(|| "BAT0".into()),
+                attr,
+                warning_color,
+                render,
+                markup: true
+            },
+            Self::into_stream
+        )
     }
 
     fn load_value_inner<T>(&self, file: &str) -> Result<T>
@@ -148,12 +177,6 @@ impl Battery {
     fn tick(&self) -> Result<Vec<Text>> {
         let battery_info = self.get_value()?;
 
-        let default_text = format!("({percentage:.0}%)", percentage = battery_info.capacity,);
-        let text = self
-            .render
-            .as_ref()
-            .map_or(default_text, |x| (x)(battery_info.clone()));
-
         // If we're discharging and have <=10% left, then render with a
         // special warning color.
         let mut attr = self.attr.clone();
@@ -161,20 +184,20 @@ impl Battery {
             attr.fg_color = self.warning_color.clone()
         }
 
+        let text = (self.render)(battery_info);
+
         Ok(vec![Text {
             attr,
             text,
             stretch: false,
-            markup: self.render.is_some(),
+            markup: self.markup,
         }])
     }
-}
 
-impl Widget for Battery {
-    fn into_stream(self: Box<Self>) -> Result<WidgetStream> {
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
         let interval = time::interval(self.update_interval);
         let stream = IntervalStream::new(interval).map(move |_| self.tick());
 
-        Ok(Box::pin(stream))
+        Ok(stream)
     }
 }
