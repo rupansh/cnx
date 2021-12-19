@@ -7,6 +7,7 @@ use crate::text::{Attributes, Text};
 use crate::xcb::xcb_properties_stream;
 
 use super::{WidgetStreamI, WidgetStream};
+use async_stream::stream;
 
 /// Shows the title of the currently focused window.
 ///
@@ -36,12 +37,15 @@ impl ActiveWindowTitle {
     fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
         let properties = &["_NET_ACTIVE_WINDOW", "_NET_WM_NAME"];
         let screen_idx = 0; // XXX assume
-        let (conn, stream) =
+        let mut stream =
             xcb_properties_stream(properties).context("Initialising ActiveWindowtitle")?;
+        let mapped = stream! {
+            while let Some(v) = stream.next().await {
+                yield Ok(self.on_change(stream.conn(), screen_idx));
+            }
+        };
 
-        let stream = stream.map(move |()| Ok(self.on_change(&conn, screen_idx)));
-
-        Ok(stream)
+        Ok(mapped)
     }
 
     fn on_change(&self, conn: &ewmh::Connection, screen_idx: i32) -> Vec<Text> {

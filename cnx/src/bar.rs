@@ -1,5 +1,4 @@
 use std::f64;
-use std::rc::Rc;
 
 use anyhow::{anyhow, Context, Result};
 use ordered_float::OrderedFloat;
@@ -113,7 +112,7 @@ pub enum Position {
 pub struct Bar {
     position: Position,
 
-    conn: Rc<ewmh::Connection>,
+    pub conn: ewmh::Connection,
     screen_idx: usize,
     window_id: u32,
 
@@ -142,7 +141,7 @@ impl Bar {
             .context("Failed to wrap xcb::Connection in ewmh::Connection")?;
 
         let bar = Bar {
-            conn: Rc::new(ewmh_conn),
+            conn: ewmh_conn,
             window_id,
             screen_idx,
             surface,
@@ -238,14 +237,6 @@ impl Bar {
         }
 
         Ok(())
-    }
-
-    // Returns the connection to the X server.
-    //
-    // The owner of the `Bar` is responsible for polling this for events,
-    // passing each to `Bar::process_event()`.
-    pub fn connection(&self) -> &Rc<ewmh::Connection> {
-        &self.conn
     }
 
     // Process an X event received from the `Bar::connection()`.

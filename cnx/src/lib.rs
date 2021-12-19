@@ -128,7 +128,7 @@ use widgets::{WidgetStreamI, WidgetStream};
 use tokio::pin;
 
 use crate::bar::Bar;
-use crate::xcb::XcbEventStream;
+use crate::xcb::BarEventStream;
 
 pub use bar::Position;
 
@@ -181,16 +181,16 @@ impl<FullStream: Stream<Item = (usize, WidgetStreamI)> + 'static> Cnx<FullStream
     /// This method takes ownership of the Cnx instance and runs it until either
     /// the process is terminated, or an internal error is returned.
     pub async fn run(self) -> Result<()> {
-        let mut bar = self.bar;
+        let bar = self.bar;
         let stream = self.stream;
 
-        let mut event_stream = XcbEventStream::new(bar.connection().clone())?;
+        let mut event_stream = BarEventStream::new(bar)?;
         pin!(stream);
         loop {
             tokio::select! {
                 // Pass each XCB event to the Bar.
                 Some(event) = event_stream.next() => {
-                    if let Err(err) = bar.process_event(event) {
+                    if let Err(err) = event_stream.bar_mut().process_event(event) {
                         println!("Error processing XCB event: {}", err);
                     }
                 },
@@ -201,7 +201,7 @@ impl<FullStream: Stream<Item = (usize, WidgetStreamI)> + 'static> Cnx<FullStream
                     match result {
                         Err(err) => println!("Error from widget {}: {}", idx, err),
                         Ok(texts) => {
-                            if let Err(err) = bar.update_content(idx, texts) {
+                            if let Err(err) = event_stream.bar_mut().update_content(idx, texts) {
                                 println!("Error updating widget {}: {}", idx, err);
                             }
                         }

@@ -6,6 +6,7 @@ use xcb_util::ewmh;
 
 use crate::text::{Attributes, Text};
 use crate::xcb::xcb_properties_stream;
+use async_stream::stream;
 
 use super::{WidgetStreamI, WidgetStream};
 
@@ -33,15 +34,21 @@ impl Pager {
         )
     }
 
-    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI>> {
+    fn into_stream(self) -> Result<impl Stream<Item = WidgetStreamI> + 'static> {
         let properties = &[
             "_NET_NUMBER_OF_DESKTOPS",
             "_NET_CURRENT_DESKTOP",
             "_NET_DESKTOP_NAMES",
         ];
         let screen_idx = 0;
-        let (conn, stream) = xcb_properties_stream(properties).context("Initialising Pager")?;
-        return Ok(stream.map(move |()| Ok(self.on_change(&conn, screen_idx))));
+        let mut stream = xcb_properties_stream(properties).context("Initialising Pager")?;
+        let mapped = stream! {
+            while let Some(()) = stream.next().await {
+                yield Ok(self.on_change(&stream.conn(), screen_idx));
+            }
+        };
+
+        return Ok(mapped);
     }
 
     fn on_change(&self, conn: &ewmh::Connection, screen_idx: i32) -> Vec<Text> {
